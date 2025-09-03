@@ -1,0 +1,13 @@
+{
+  "name": "playwright-automation-bot",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.2",
+    "playwright": "^1.55.0"
+  }
+}
