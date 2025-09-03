@@ -1,5 +1,6 @@
 import { chromium, devices } from 'playwright';
 import dotenv from 'dotenv';
+import { randomBytes } from 'crypto';
 
 // Load environment variables
 dotenv.config();
@@ -43,11 +44,20 @@ class PlaywrightBot {
     ];
 
     this.userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0'
+      // Chrome 131 (Latest)
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      // Chrome 130
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      // Firefox 132 (Latest)
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0',
+      // Safari
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
+      // Edge
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
     ];
   }
 
@@ -109,11 +119,22 @@ class PlaywrightBot {
       height: baseViewport.height + Math.floor(Math.random() * 100) - 50
     };
 
+    // Generate additional fingerprinting data
+    const webGLVendor = ['Intel Inc.', 'NVIDIA Corporation', 'AMD', 'Google Inc.'][Math.floor(Math.random() * 4)];
+    const webGLRenderer = [
+      'Intel Iris OpenGL Engine',
+      'NVIDIA GeForce GTX 1060',
+      'AMD Radeon Pro 560X OpenGL Engine',
+      'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0)'
+    ][Math.floor(Math.random() * 4)];
+
     return {
       userAgent,
       viewport,
       timezone,
-      locale
+      locale,
+      webGLVendor,
+      webGLRenderer
     };
   }
 
@@ -124,13 +145,29 @@ class PlaywrightBot {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=VizDisplayCompositor,TranslateUI',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-client-side-phishing-detection',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+        '--disable-hang-monitor',
+        '--disable-popup-blocking',
+        '--disable-prompt-on-repost',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update',
+        '--enable-automation=false',
+        '--password-store=basic',
+        '--use-mock-keychain',
         `--user-agent=${fingerprint.userAgent}`,
-        `--lang=${fingerprint.locale}`
+        `--lang=${fingerprint.locale}`,
+        `--window-size=${fingerprint.viewport.width},${fingerprint.viewport.height}`
       ]
     };
 
@@ -153,10 +190,58 @@ class PlaywrightBot {
 
     const context = await browser.newContext(contextOptions);
     
-    // Block unnecessary resources for speed
+    // Add stealth scripts to avoid detection
+    await context.addInitScript(() => {
+      // Remove webdriver property
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+      });
+
+      // Mock chrome runtime
+      window.chrome = {
+        runtime: {},
+      };
+
+      // Mock permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: Notification.permission }) :
+          originalQuery(parameters)
+      );
+
+      // Mock plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+
+      // Mock languages
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en'],
+      });
+
+      // Mock WebGL
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        if (parameter === 37445) {
+          return 'Intel Inc.';
+        }
+        if (parameter === 37446) {
+          return 'Intel Iris OpenGL Engine';
+        }
+        return getParameter(parameter);
+      };
+    });
+    
+    // Block unnecessary resources for speed but allow some images for realism
     await context.route('**/*', (route) => {
       const resourceType = route.request().resourceType();
-      if (['image', 'font', 'media'].includes(resourceType)) {
+      const url = route.request().url();
+      
+      // Block most media but allow some for realism
+      if (resourceType === 'image' && Math.random() > 0.3) {
+        route.abort();
+      } else if (['font', 'media'].includes(resourceType)) {
         route.abort();
       } else {
         route.continue();
@@ -172,100 +257,391 @@ class PlaywrightBot {
     try {
       console.log(`INFO: Searching Google for keyword: "${keyword}"`);
       
-      // Navigate to Google
-      await page.goto('https://www.google.com', { 
-        waitUntil: 'domcontentloaded',
-        timeout: 30000 
-      });
+      // Add random delay before starting
+      const initialDelay = Math.floor(Math.random() * 2000) + 1000; // 1-3 seconds
+      console.log(`INFO: Initial delay: ${initialDelay}ms`);
+      await new Promise(resolve => setTimeout(resolve, initialDelay));
+      
+      // Navigate to Google with retry mechanism
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries) {
+        try {
+          await page.goto('https://www.google.com', { 
+            waitUntil: 'domcontentloaded',
+            timeout: 30000 
+          });
+
+          // Check if we're on a CAPTCHA page
+          const currentUrl = page.url();
+          if (currentUrl.includes('/sorry/') || currentUrl.includes('captcha')) {
+            console.log(`WARN: CAPTCHA detected (attempt ${retryCount + 1}/${maxRetries})`);
+            retryCount++;
+            if (retryCount < maxRetries) {
+              const retryDelay = Math.floor(Math.random() * 5000) + 3000; // 3-8 seconds
+              console.log(`INFO: Waiting ${retryDelay}ms before retry...`);
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              continue;
+            } else {
+              throw new Error('CAPTCHA encountered after maximum retries. Try using a proxy or different user agent.');
+            }
+          }
+
+          break; // Success, exit retry loop
+        } catch (error) {
+          retryCount++;
+          if (retryCount >= maxRetries) {
+            throw error;
+          }
+          console.log(`WARN: Navigation failed (attempt ${retryCount}/${maxRetries}): ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      // Simulate human behavior - move mouse randomly
+      await page.mouse.move(
+        Math.floor(Math.random() * 800) + 100,
+        Math.floor(Math.random() * 600) + 100
+      );
 
       // Handle cookie consent if present
       try {
-        await page.click('button:has-text("Accept all")', { timeout: 2000 });
+        const cookieButtons = [
+          'button:has-text("Accept all")',
+          'button:has-text("I agree")',
+          'button:has-text("Accept")',
+          '#L2AGLb', // Google's "I agree" button ID
+          '[aria-label*="Accept"]'
+        ];
+        
+        for (const selector of cookieButtons) {
+          try {
+            await page.click(selector, { timeout: 1000 });
+            console.log(`INFO: Clicked cookie consent: ${selector}`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            break;
+          } catch (e) {
+            // Try next selector
+          }
+        }
       } catch (e) {
         // Cookie consent not found or already handled
       }
 
-      // Find search input and perform search
+      // Find search input and perform search with human-like typing
       const searchInput = await page.locator('input[name="q"], textarea[name="q"]').first();
-      await searchInput.fill(keyword);
+      
+      // Click on search input first
+      await searchInput.click();
+      await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 500) + 200));
+      
+      // Type with human-like delays
+      for (let i = 0; i < keyword.length; i++) {
+        await searchInput.type(keyword[i]);
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 150) + 50));
+      }
+      
+      // Random delay before pressing Enter
+      await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
       await searchInput.press('Enter');
 
-      // Wait for search results
-      await page.waitForSelector('div#search', { timeout: 15000 });
+      // Wait for search results with better error handling
+      try {
+        await page.waitForSelector('div#search', { timeout: 15000 });
+      } catch (error) {
+        // Check if we're on CAPTCHA page again
+        const currentUrl = page.url();
+        if (currentUrl.includes('/sorry/') || currentUrl.includes('captcha')) {
+          throw new Error('CAPTCHA encountered during search. Please try again later or use a proxy.');
+        }
+        throw error;
+      }
       
       console.log('INFO: Search results loaded, extracting URLs...');
 
-      // Extract search result URLs
-      const searchResults = await page.evaluate(() => {
-        const results = [];
-        const links = document.querySelectorAll('div#search a[href^="http"]:not([href*="google.com])');
+      // Extract search results and find target domain
+      console.log(`INFO: Looking for domain: "${targetDomain}"`);
+      
+      const targetLink = await page.evaluate((domain) => {
+        const links = document.querySelectorAll('div#search a[href^="http"]:not([href*="google.com"])');
         
         for (const link of links) {
           const url = link.href;
-          const title = link.textContent?.trim() || '';
           
           // Skip if URL contains common Google redirect patterns
-          if (!url.includes('/url?') && !url.includes('webcache') && url.startsWith('http')) {
-            results.push({ url, title });
+          if (url.includes('/url?') || url.includes('webcache') || !url.startsWith('http')) {
+            continue;
           }
           
-          // Limit to first 10 results
-          if (results.length >= 10) break;
+          try {
+            const linkDomain = new URL(url).hostname.toLowerCase();
+            if (linkDomain.includes(domain.toLowerCase()) || 
+                domain.toLowerCase().includes(linkDomain)) {
+              return {
+                url: url,
+                title: link.textContent?.trim() || '',
+                element: link
+              };
+            }
+          } catch (error) {
+            continue;
+          }
+        }
+        return null;
+      }, targetDomain);
+
+      if (!targetLink) {
+        console.log(`INFO: Target domain "${targetDomain}" not found on page 1, checking page 2...`);
+        
+        // Try to go to page 2
+        const nextPageFound = await this.goToNextPage(page);
+        
+        if (nextPageFound) {
+          // Search again on page 2
+          const targetLinkPage2 = await page.evaluate((domain) => {
+            const links = document.querySelectorAll('div#search a[href^="http"]:not([href*="google.com"])');
+            
+            for (const link of links) {
+              const url = link.href;
+              
+              // Skip if URL contains common Google redirect patterns
+              if (url.includes('/url?') || url.includes('webcache') || !url.startsWith('http')) {
+                continue;
+              }
+              
+              try {
+                const linkDomain = new URL(url).hostname.toLowerCase();
+                if (linkDomain.includes(domain.toLowerCase()) || 
+                    domain.toLowerCase().includes(linkDomain)) {
+                  return {
+                    url: url,
+                    title: link.textContent?.trim() || ''
+                  };
+                }
+              } catch (error) {
+                continue;
+              }
+            }
+            return null;
+          }, targetDomain);
+
+          if (targetLinkPage2) {
+            console.log(`INFO: Found target domain on page 2: ${targetLinkPage2.url}`);
+            
+            // Click on the target link on page 2
+            console.log('INFO: Clicking on target link from page 2...');
+            
+            // Add human-like delay before clicking
+            await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
+            
+            // Find and click the link
+            const linkSelector = `a[href="${targetLinkPage2.url}"]`;
+            try {
+              await page.click(linkSelector);
+              console.log('INFO: Successfully clicked on target link from page 2');
+              
+              // Wait for navigation
+              await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+              
+              const finalUrl = page.url();
+              console.log(`INFO: Navigated to: ${finalUrl}`);
+              
+              return finalUrl;
+              
+            } catch (error) {
+              console.log(`WARN: Could not click link from page 2, navigating directly: ${error.message}`);
+              return targetLinkPage2.url;
+            }
+          }
         }
         
-        return results;
-      });
+        // Fallback: get all results from current page and use first one
+        const allResults = await page.evaluate(() => {
+          const results = [];
+          const links = document.querySelectorAll('div#search a[href^="http"]:not([href*="google.com"])');
+          
+          for (const link of links) {
+            const url = link.href;
+            if (!url.includes('/url?') && !url.includes('webcache') && url.startsWith('http')) {
+              results.push({
+                url: url,
+                title: link.textContent?.trim() || ''
+              });
+              if (results.length >= 10) break;
+            }
+          }
+          return results;
+        });
 
-      if (searchResults.length === 0) {
-        throw new Error('No search results found');
+        if (allResults.length === 0) {
+          throw new Error('No search results found on either page');
+        }
+
+        console.log(`WARN: Target domain "${targetDomain}" not found on pages 1-2`);
+        console.log(`INFO: Found ${allResults.length} search results, using first result: ${allResults[0].url}`);
+        return allResults[0].url;
       }
 
-      console.log(`INFO: Found ${searchResults.length} search results`);
-
-      // Find target URL
-      const targetUrl = this.findTargetUrl(searchResults, targetDomain);
+      console.log(`INFO: Found target domain in search results: ${targetLink.url}`);
       
-      return targetUrl;
+      // Click on the target link
+      console.log('INFO: Clicking on target link...');
+      
+      // Add human-like delay before clicking
+      await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
+      
+      // Find and click the link
+      const linkSelector = `a[href="${targetLink.url}"]`;
+      try {
+        await page.click(linkSelector);
+        console.log('INFO: Successfully clicked on target link');
+        
+        // Wait for navigation
+        await page.waitForLoadState('domcontentloaded', { timeout: 30000 });
+        
+        const finalUrl = page.url();
+        console.log(`INFO: Navigated to: ${finalUrl}`);
+        
+        return finalUrl;
+        
+      } catch (error) {
+        console.log(`WARN: Could not click link, navigating directly: ${error.message}`);
+        return targetLink.url;
+      }
 
     } finally {
       await page.close();
     }
   }
 
-  findTargetUrl(searchResults, targetDomain) {
-    console.log(`INFO: Looking for domain: "${targetDomain}"`);
-    
-    // First, try to find a result matching the target domain
-    for (const result of searchResults) {
-      try {
-        const resultDomain = new URL(result.url).hostname.toLowerCase();
-        if (resultDomain.includes(targetDomain.toLowerCase()) || 
-            targetDomain.toLowerCase().includes(resultDomain)) {
-          console.log(`INFO: Found matching domain: ${result.url}`);
-          return result.url;
-        }
-      } catch (error) {
-        console.log(`WARN: Invalid URL in search result: ${result.url}`);
-      }
-    }
 
-    // Fallback to first result
-    const firstUrl = searchResults[0].url;
-    console.log(`INFO: No domain match found, using first result: ${firstUrl}`);
-    return firstUrl;
+
+  async goToNextPage(page) {
+    try {
+      console.log('INFO: Attempting to go to next page...');
+      
+      // Add human-like delay before clicking next
+      await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
+      
+      // Try different selectors for the "Next" button
+      const nextSelectors = [
+        'a#pnnext',  // Google's standard next button ID
+        'a[aria-label="Next"]',
+        'a[aria-label="Sonraki"]', // Turkish
+        'a[aria-label="Suivant"]', // French  
+        'a:has-text("Next")',
+        'a:has-text("Sonraki")',
+        'a:has-text("Suivant")',
+        'td.b:last-child a', // Table-based pagination
+        '[role="navigation"] a:last-child'
+      ];
+      
+      for (const selector of nextSelectors) {
+        try {
+          const nextButton = await page.locator(selector).first();
+          if (await nextButton.isVisible({ timeout: 2000 })) {
+            console.log(`INFO: Found next button with selector: ${selector}`);
+            
+            // Scroll to the button if needed
+            await nextButton.scrollIntoViewIfNeeded();
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Click the next button
+            await nextButton.click();
+            console.log('INFO: Successfully clicked next button');
+            
+            // Wait for the new page to load
+            await page.waitForLoadState('domcontentloaded', { timeout: 15000 });
+            
+            // Verify we're on page 2 by checking URL or page indicators
+            const currentUrl = page.url();
+            if (currentUrl.includes('start=') || currentUrl.includes('page=2')) {
+              console.log('INFO: Successfully navigated to page 2');
+              return true;
+            }
+            
+            // Alternative check: look for page 2 indicators
+            const pageIndicator = await page.locator('td.cur:has-text("2")').first().isVisible({ timeout: 3000 });
+            if (pageIndicator) {
+              console.log('INFO: Successfully navigated to page 2 (verified by page indicator)');
+              return true;
+            }
+            
+            console.log('INFO: Clicked next but page verification unclear, proceeding...');
+            return true;
+            
+          }
+        } catch (error) {
+          // Try next selector
+          continue;
+        }
+      }
+      
+      console.log('WARN: Could not find next button');
+      return false;
+      
+    } catch (error) {
+      console.log(`WARN: Error navigating to next page: ${error.message}`);
+      return false;
+    }
+  }
+
+  async simulateUserBehavior(page, headless) {
+    try {
+      console.log('INFO: Simulating user behavior on current page...');
+      
+      // Wait a moment for page to fully load
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Random mouse movements
+      const mouseMovements = Math.floor(Math.random() * 3) + 2; // 2-4 movements
+      for (let i = 0; i < mouseMovements; i++) {
+        await page.mouse.move(
+          Math.floor(Math.random() * 800) + 100,
+          Math.floor(Math.random() * 600) + 100,
+          { steps: 10 }
+        );
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
+      }
+      
+      // Random scrolling
+      const scrollActions = Math.floor(Math.random() * 3) + 1; // 1-3 scrolls
+      for (let i = 0; i < scrollActions; i++) {
+        const scrollY = Math.floor(Math.random() * 500) + 200;
+        await page.evaluate((y) => {
+          window.scrollBy(0, y);
+        }, scrollY);
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
+      }
+      
+      // Stay on page for a realistic amount of time
+      const stayTime = Math.floor(Math.random() * 5000) + 3000; // 3-8 seconds
+      console.log(`INFO: Staying on page for ${stayTime}ms to simulate reading...`);
+      await new Promise(resolve => setTimeout(resolve, stayTime));
+      
+      // If not headless, wait for additional observation
+      if (!headless) {
+        console.log('INFO: Browser running in visible mode, waiting 5 seconds for observation...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      
+    } catch (error) {
+      console.log(`WARN: Error during user behavior simulation: ${error.message}`);
+    }
   }
 
   async visitPage(context, url, headless) {
     const page = await context.newPage();
     
-    // Add random delay to mimic human behavior
-    const delay = Math.floor(Math.random() * 300) + 200; // 200-500ms
-    console.log(`INFO: Adding human-like delay: ${delay}ms`);
-    await new Promise(resolve => setTimeout(resolve, delay));
-    
-    console.log(`INFO: Navigating to target page: ${url}`);
-    
     try {
+      // Add random delay to mimic human behavior
+      const delay = Math.floor(Math.random() * 2000) + 1000; // 1-3 seconds
+      console.log(`INFO: Adding human-like delay: ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      
+      console.log(`INFO: Navigating to target page: ${url}`);
+      
       await page.goto(url, { 
         waitUntil: 'domcontentloaded',
         timeout: 30000 
@@ -273,10 +649,39 @@ class PlaywrightBot {
       
       console.log(`INFO: Successfully loaded target page: ${url}`);
       
-      // If not headless, wait for observation
+      // Simulate human behavior on the page
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Random mouse movements
+      const mouseMovements = Math.floor(Math.random() * 3) + 2; // 2-4 movements
+      for (let i = 0; i < mouseMovements; i++) {
+        await page.mouse.move(
+          Math.floor(Math.random() * 800) + 100,
+          Math.floor(Math.random() * 600) + 100,
+          { steps: 10 }
+        );
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 1000) + 500));
+      }
+      
+      // Random scrolling
+      const scrollActions = Math.floor(Math.random() * 3) + 1; // 1-3 scrolls
+      for (let i = 0; i < scrollActions; i++) {
+        const scrollY = Math.floor(Math.random() * 500) + 200;
+        await page.evaluate((y) => {
+          window.scrollBy(0, y);
+        }, scrollY);
+        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 2000) + 1000));
+      }
+      
+      // Stay on page for a realistic amount of time
+      const stayTime = Math.floor(Math.random() * 5000) + 3000; // 3-8 seconds
+      console.log(`INFO: Staying on page for ${stayTime}ms to simulate reading...`);
+      await new Promise(resolve => setTimeout(resolve, stayTime));
+      
+      // If not headless, wait for additional observation
       if (!headless) {
-        console.log('INFO: Browser running in visible mode, waiting 3 seconds for observation...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log('INFO: Browser running in visible mode, waiting 5 seconds for observation...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
       }
       
     } catch (error) {
@@ -317,15 +722,27 @@ class PlaywrightBot {
       );
 
       try {
-        // Search Google and get target URL
+        // Search Google and click on target domain
         const targetUrl = await this.searchGoogle(context, params.keyword, params.domain);
         
-        // Visit target page
-        await this.visitPage(context, targetUrl, params.headless);
+        // If searchGoogle returned a URL without clicking (fallback case), visit the page
+        if (targetUrl && !targetUrl.includes('sorry')) {
+          // Check if we're already on the target page
+          const currentPage = context.pages()[context.pages().length - 1];
+          const currentUrl = currentPage ? currentPage.url() : '';
+          
+          if (!currentUrl.includes(targetUrl.split('/')[2])) {
+            console.log('INFO: Need to visit target page separately...');
+            await this.visitPage(context, targetUrl, params.headless);
+          } else {
+            console.log('INFO: Already on target page, simulating user behavior...');
+            await this.simulateUserBehavior(currentPage, params.headless);
+          }
+        }
 
         const duration = Date.now() - startTime;
         console.log(`\nDONE: Automation completed successfully in ${duration}ms`);
-        console.log(`DONE: Visited URL: ${targetUrl}`);
+        console.log(`DONE: Final URL: ${targetUrl}`);
         
       } finally {
         await context.close();
